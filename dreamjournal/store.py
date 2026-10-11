@@ -1,15 +1,21 @@
 # -*- coding: utf-8 -*-
 """AI 梦境记录与解析 —— 数据访问层（对应实验3 表 3-5 的 DreamRepository / SQLiteStore）。
 
-选择 SQLite 的理由见实验3 ADR-02：单用户单机、无并发需求、标准库零部署，
-且天然满足 NFR-S1“数据默认仅存本机”。
-
-v0.1.0 可运行初版：只实现建表、新增、查询、列表、删除。
+v0.2.0 修订（针对实验4 代码审查发现的问题）：
+  · R2 数据访问异常统一转换为 StorageError，不再把裸 sqlite3.Error 抛给界面
+  · R4 补上 search()（实验3 表 3-8 遗漏的检索接口签名），使用参数化 LIKE
+       并转义 % 与 _，杜绝注入与通配符滥用
+  · 新增 stats()/recent_days() 供本地趋势统计使用（不调用模型）
 """
 import os
 import sqlite3
 
 from . import domain
+
+
+class StorageError(Exception):
+    """数据访问层统一异常，界面层只需捕获这一种。"""
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS dream_record (
@@ -42,94 +48,148 @@ CREATE INDEX IF NOT EXISTS idx_field_record ON parsed_field(record_id);
 """
 
 
+def _escape_like(s):
+    """转义 LIKE 的通配符，避免用户输入的 % 和 _ 变成通配符。"""
+    return s.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+
+
 class DreamRepository:
     def __init__(self, db_path):
         self.db_path = db_path
         d = os.path.dirname(os.path.abspath(db_path))
         if d and not os.path.isdir(d):
-            os.makedirs(d, exist_ok=True)
+            try:
+                os.makedirs(d, exist_ok=True)
+            except OSError as e:
+                raise StorageError('无法创建数据目录 %s：%s' % (d, e))
 
+    # ---------------- 连接 ----------------
     def connect(self):
-        conn = sqlite3.connect(self.db_path)
+        try:
+            conn = sqlite3.connect(self.db_path)
+        except sqlite3.Error as e:
+            raise StorageError('无法打开数据库 %s：%s' % (self.db_path, e))
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA foreign_keys = ON')
         return conn
 
+    def _exec(self, sql, params=(), fetch=None):
+        try:
+            with self.connect() as conn:
+                cur = conn.execute(sql, params)
+                if fetch == 'one':
+                    return cur.fetchone()
+                if fetch == 'all':
+                    return cur.fetchall()
+                return cur.lastrowid
+        except sqlite3.Error as e:
+            raise StorageError('数据库操作失败：%s' % e)
+
     def init_schema(self):
-        with self.connect() as conn:
-            conn.executescript(SCHEMA)
+        try:
+            with self.connect() as conn:
+                conn.executescript(SCHEMA)
+        except sqlite3.Error as e:
+            raise StorageError('初始化数据库结构失败：%s' % e)
 
     # ---------------- 记录 ----------------
     def add(self, rec):
-        with self.connect() as conn:
-            cur = conn.execute(
-                'INSERT INTO dream_record (dream_date, created_at, source, raw_text,'
-                ' transcript_confidence, information_density, audio_path, status)'
-                ' VALUES (?,?,?,?,?,?,?,?)',
-                (rec.dream_date, rec.created_at, rec.source, rec.raw_text,
-                 rec.transcript_confidence, rec.information_density,
-                 rec.audio_path, rec.status))
-            rec.id = cur.lastrowid
-            return rec.id
+        rec.id = self._exec(
+            'INSERT INTO dream_record (dream_date, created_at, source, raw_text,'
+            ' transcript_confidence, information_density, audio_path, status)'
+            ' VALUES (?,?,?,?,?,?,?,?)',
+            (rec.dream_date, rec.created_at, rec.source, rec.raw_text,
+             rec.transcript_confidence, rec.information_density,
+             rec.audio_path, rec.status))
+        return rec.id
 
     def get(self, record_id):
-        with self.connect() as conn:
-            row = conn.execute('SELECT * FROM dream_record WHERE id = ?',
-                               (record_id,)).fetchone()
+        row = self._exec('SELECT * FROM dream_record WHERE id = ?',
+                         (record_id,), fetch='one')
         return self._to_record(row) if row else None
 
     def list_all(self, limit=200):
-        with self.connect() as conn:
-            rows = conn.execute(
-                'SELECT * FROM dream_record ORDER BY dream_date DESC, id DESC'
-                ' LIMIT ?', (limit,)).fetchall()
+        rows = self._exec(
+            'SELECT * FROM dream_record ORDER BY dream_date DESC, id DESC LIMIT ?',
+            (limit,), fetch='all')
+        return [self._to_record(r) for r in rows]
+
+    def search(self, keyword, limit=200):
+        """全文检索（UC-05）。参数化查询 + 转义通配符，防止注入。"""
+        pat = '%' + _escape_like(keyword.strip()) + '%'
+        rows = self._exec(
+            "SELECT * FROM dream_record WHERE raw_text LIKE ? ESCAPE '\\'"
+            ' ORDER BY dream_date DESC, id DESC LIMIT ?',
+            (pat, limit), fetch='all')
         return [self._to_record(r) for r in rows]
 
     def update_status(self, record_id, status):
-        with self.connect() as conn:
-            conn.execute('UPDATE dream_record SET status = ? WHERE id = ?',
-                         (status, record_id))
+        self._exec('UPDATE dream_record SET status = ? WHERE id = ?',
+                   (status, record_id))
+
+    def update_text(self, record_id, raw_text):
+        self._exec('UPDATE dream_record SET raw_text = ? WHERE id = ?',
+                   (raw_text, record_id))
 
     def delete(self, record_id):
-        with self.connect() as conn:
-            conn.execute('DELETE FROM parsed_field WHERE record_id = ?', (record_id,))
-            conn.execute('DELETE FROM dream_record WHERE id = ?', (record_id,))
+        # parsed_field 由 ON DELETE CASCADE 自动清理；显式删除是为了不依赖 pragma
+        self._exec('DELETE FROM parsed_field WHERE record_id = ?', (record_id,))
+        self._exec('DELETE FROM dream_record WHERE id = ?', (record_id,))
 
     def clear_all(self):
-        with self.connect() as conn:
-            conn.execute('DELETE FROM parsed_field')
-            conn.execute('DELETE FROM dream_record')
+        self._exec('DELETE FROM parsed_field')
+        self._exec('DELETE FROM dream_record')
 
     def count(self):
-        with self.connect() as conn:
-            return conn.execute('SELECT COUNT(*) FROM dream_record').fetchone()[0]
+        return self._exec('SELECT COUNT(*) AS n FROM dream_record',
+                          fetch='one')['n']
 
     # ---------------- 字段 ----------------
     def add_field(self, f):
-        with self.connect() as conn:
-            cur = conn.execute(
-                'INSERT INTO parsed_field (record_id, field_type, label, confidence,'
-                ' needs_confirm, user_edited) VALUES (?,?,?,?,?,?)',
-                (f.record_id, f.field_type, f.label, f.confidence,
-                 int(f.needs_confirm), int(f.user_edited)))
-            f.id = cur.lastrowid
-            return f.id
+        f.id = self._exec(
+            'INSERT INTO parsed_field (record_id, field_type, label, confidence,'
+            ' needs_confirm, user_edited) VALUES (?,?,?,?,?,?)',
+            (f.record_id, f.field_type, f.label, f.confidence,
+             int(f.needs_confirm), int(f.user_edited)))
+        return f.id
+
+    def get_field(self, field_id):
+        row = self._exec('SELECT * FROM parsed_field WHERE id = ?',
+                         (field_id,), fetch='one')
+        return self._to_field(row) if row else None
 
     def fields_of(self, record_id):
-        with self.connect() as conn:
-            rows = conn.execute(
-                'SELECT * FROM parsed_field WHERE record_id = ? ORDER BY id',
-                (record_id,)).fetchall()
+        rows = self._exec('SELECT * FROM parsed_field WHERE record_id = ?'
+                          ' ORDER BY id', (record_id,), fetch='all')
         return [self._to_field(r) for r in rows]
 
     def update_field_label(self, field_id, label):
-        with self.connect() as conn:
-            conn.execute('UPDATE parsed_field SET label = ?, user_edited = 1'
-                         ' WHERE id = ?', (label, field_id))
+        self._exec('UPDATE parsed_field SET label = ?, user_edited = 1'
+                   ' WHERE id = ?', (label, field_id))
 
     def delete_field(self, field_id):
-        with self.connect() as conn:
-            conn.execute('DELETE FROM parsed_field WHERE id = ?', (field_id,))
+        self._exec('DELETE FROM parsed_field WHERE id = ?', (field_id,))
+
+    def count_pending(self, record_id):
+        return self._exec(
+            'SELECT COUNT(*) AS n FROM parsed_field'
+            ' WHERE record_id = ? AND needs_confirm = 1',
+            (record_id,), fetch='one')['n']
+
+    # ---------------- 本地统计（不调用模型） ----------------
+    def stats_by_field_type(self, field_type, exclude_pending=True, limit=5):
+        sql = ('SELECT label, COUNT(*) AS n FROM parsed_field'
+               ' WHERE field_type = ?')
+        if exclude_pending:
+            sql += ' AND needs_confirm = 0'
+        sql += ' GROUP BY label ORDER BY n DESC, label ASC LIMIT ?'
+        return [(r['label'], r['n']) for r in
+                self._exec(sql, (field_type, limit), fetch='all')]
+
+    def recent_records(self, since_date):
+        rows = self._exec('SELECT * FROM dream_record WHERE dream_date >= ?'
+                          ' ORDER BY dream_date DESC', (since_date,), fetch='all')
+        return [self._to_record(r) for r in rows]
 
     # ---------------- 工具 ----------------
     @staticmethod

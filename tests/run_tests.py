@@ -104,15 +104,31 @@ def tc05_missing_record():
 
 
 def tc06_invalid_date():
-    """TC-06 格式错误：非法日期应被拒绝。"""
+    """TC-06 格式错误：非法日期被拒绝；非规范但可解析的日期被规范化。
+
+    用例修正说明：本用例初稿只断言“2026-9-7 应被拒绝”，实测发现
+    Python strptime 接受非零填充写法。经分析，拒绝它是过度严格且损害易用性，
+    真正的风险是它会让字符串排序与日期筛选失效，因此改为断言“规范化”。
+    """
     repo, svc = fresh()
-    for bad in ('2026-13-45', '2026/09/27', 'abc', '2026-9-7'):
+    # 空字符串不在其中：create() 的约定是“日期可省略，省略或留空取今天”
+    for bad in ('2026-13-45', '2026/09/27', 'abc', '2026-02-30'):
         try:
             svc['record'].create('测试梦境内容', dream_date=bad)
         except ValidationError:
             continue
         raise AssertionError('非法日期 %r 未被拒绝' % bad)
-    return '4 种非法日期格式全部被拒绝'
+
+    rec = svc['record'].create('非规范日期的梦。', dream_date='2026-9-7')
+    got = svc['record'].get(rec.id)
+    assert got.dream_date == '2026-09-07', \
+        '非规范日期未规范化，实际入库为 %r' % got.dream_date
+
+    svc['record'].create('较早的梦。', dream_date='2026-09-10')
+    svc['record'].create('较晚的梦。', dream_date='2026-09-20')
+    order = [r.dream_date for r in svc['record'].list_recent()]
+    assert order == sorted(order, reverse=True), '字符串排序不正确：%s' % order
+    return '4 种非法日期被拒绝；2026-9-7 规范化为 2026-09-07，排序正确'
 
 
 def tc07_manual_label_and_confirm():
