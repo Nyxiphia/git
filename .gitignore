@@ -53,3 +53,15 @@ venv/
 .pytest_cache/
 .mypy_cache/
 *.egg-info/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ---- 本项目运行产物（数据仅存本机，不入库）----
+data/
+logs/
+out/
+*.db
