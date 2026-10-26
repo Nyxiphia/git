@@ -22,6 +22,13 @@ STOP_BIGRAMS = {
     '一个', '没有', '不是', '就是', '这些', '那些', '进行', '通过', '对于', '其中',
 }
 
+# 疑问词/指代词：只表达“在问什么”，不携带内容，参与匹配会把不相关片段顶上来。
+# 只在**查询侧**过滤（文档侧照常索引，避免影响正常词频统计）。
+QUESTION_STOP = {
+    '为什', '什么', '么不', '怎么', '么样', '如何', '何用', '哪些', '是否', '能否',
+    '这个', '个项', '那个', '请问', '一下', '多少', '几个', '吗',
+}
+
 
 def tokenize(text):
     """切词：ASCII 单词（小写）+ 连续汉字串的二元组。"""
@@ -44,14 +51,17 @@ class BM25Retriever:
     k1/b 为标准取值；df 统计用于 idf，长文档用 b 做长度归一。
     """
 
-    def __init__(self, chunks, k1=1.5, b=0.75, min_score=2.0,
-                 min_matched=2, min_coverage=0.30):
+    def __init__(self, chunks, k1=1.5, b=0.75, min_score=5.0,
+                 min_matched=2, min_coverage=0.30,
+                 require_distinctive=True, distinctive_df_ratio=0.15):
         self.chunks = chunks
         self.k1 = k1
         self.b = b
         self.min_score = min_score
         self.min_matched = min_matched
         self.min_coverage = min_coverage
+        self.require_distinctive = require_distinctive
+        self.distinctive_df_ratio = distinctive_df_ratio
         self.docs_tokens = [tokenize(c['text'] + ' ' + c.get('heading', ''))
                             for c in chunks]
         self.doc_len = [len(t) for t in self.docs_tokens]
@@ -74,16 +84,27 @@ class BM25Retriever:
     def search(self, query, k=4):
         """返回 Top-k 片段（按分数降序），并附排序依据。
 
-        相关性判断方法（2.4 要求说明）——三条同时满足才算“相关”：
+        相关性判断方法（2.4 要求说明）——四条同时满足才算“相关”：
           1) 分数门槛：BM25 总分 >= min_score（默认 2.0）；
           2) 命中词数：命中的查询词 >= min_matched（默认 2），避免单个高频词蒙中；
-          3) 覆盖率：命中词数 / 查询词数 >= min_coverage（默认 0.30）。
-        三条中任一不满足即丢弃该片段；全部片段被丢弃时判定“无相关片段”，
-        上层返回“资料不足”，不把无关片段塞进上下文。
+          3) 覆盖率：命中词数 / **可匹配查询词数** >= min_coverage（默认 0.30）。
+             “可匹配查询词”指在语料中出现过的词（df>0）；把根本不存在的词算进分母，
+             会让长问题被系统性惩罚——这个问题是在实机测试中发现的，见实验5 3.4；
+          4) 区分度：至少要命中一个“有区分度的词”（df <= 15% × 片段总数）。
+             否则像“项目”“功能”“为什么”这类泛词也能让不相关片段通过门槛。
         """
-        q_tokens = [t for t in dict.fromkeys(tokenize(query))]
+        raw_tokens = [t for t in dict.fromkeys(tokenize(query))]
+        # 注意：曾尝试在查询侧过滤疑问词（为什/什么/如何…），实测会导致
+        # “为什么选 SQLite 而不是 ORM” 之类问题区分度下降、并让无关问题误命中，
+        # 因此回退，不做查询侧停用词过滤。
+        q_tokens = raw_tokens
         if not q_tokens or self.N == 0:
             return [], {'query_tokens': q_tokens, 'candidates': 0, 'method': 'BM25'}
+
+        # 只在语料中出现过的查询词才计入分母
+        effective = [t for t in q_tokens if self.df.get(t, 0) > 0]
+        denom = len(effective) or 1
+        distinctive_df = max(1, int(self.distinctive_df_ratio * self.N))
 
         scored = []
         for i, tf in enumerate(self.tf):
@@ -98,13 +119,15 @@ class BM25Retriever:
                 score += s
                 hits.append((t, round(s, 3)))
             if hits:
-                cov = len(hits) / len(q_tokens)
-                scored.append((score, i, hits, cov))
+                cov = len(hits) / denom
+                has_dist = any(self.df.get(t, 0) <= distinctive_df for t, _ in hits)
+                scored.append((score, i, hits, cov, has_dist))
         scored.sort(key=lambda x: -x[0])
 
         out = []
-        rejected = {'low_score': 0, 'too_few_matched': 0, 'low_coverage': 0}
-        for score, i, hits, cov in scored[:k * 3]:
+        rejected = {'low_score': 0, 'too_few_matched': 0, 'low_coverage': 0,
+                    'no_distinctive': 0}
+        for score, i, hits, cov, has_dist in scored[:k * 4]:
             if score < self.min_score:
                 rejected['low_score'] += 1
                 continue
@@ -113,6 +136,9 @@ class BM25Retriever:
                 continue
             if cov < self.min_coverage:
                 rejected['low_coverage'] += 1
+                continue
+            if self.require_distinctive and not has_dist:
+                rejected['no_distinctive'] += 1
                 continue
             c = dict(self.chunks[i])
             c['score'] = round(score, 3)
@@ -123,13 +149,16 @@ class BM25Retriever:
                 break
         for r, c in enumerate(out):
             c['rank'] = r + 1
-        info = {'query_tokens': q_tokens, 'candidates': len(scored),
+        info = {'query_tokens': q_tokens, 'effective_tokens': effective,
+                'candidates': len(scored),
                 'returned': len(out), 'min_score': self.min_score,
                 'min_matched': self.min_matched, 'min_coverage': self.min_coverage,
+                'distinctive_df_max': distinctive_df,
                 'rejected': rejected,
                 'top_score': round(scored[0][0], 3) if scored else 0.0,
                 'top_coverage': round(scored[0][3], 2) if scored else 0.0,
-                'method': 'BM25(k1=%.1f, b=%.2f) + 分数门槛 %.1f + 命中词≥%d + 覆盖率≥%.0f%%'
+                'method': 'BM25(k1=%.1f, b=%.2f) + 分数门槛 %.1f + 命中词≥%d + '
+                          '覆盖率≥%.0f%%（分母=可匹配词）+ 含区分度词(df≤%d)'
                           % (self.k1, self.b, self.min_score, self.min_matched,
-                             self.min_coverage * 100)}
+                             self.min_coverage * 100, distinctive_df)}
         return out, info
