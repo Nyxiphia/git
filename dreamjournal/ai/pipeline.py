@@ -157,8 +157,9 @@ class RagPipeline:
         chunks_ctx, ctx_info = assemble_context(chunks, self.max_context_chars)
         res['context_info'] = ctx_info
 
-        # 4) 组装完整输入
-        messages, meta = prompts.build_messages(question, chunks_ctx, version, history)
+        # 4) 组装完整输入（对照组用中性提示，不提供资料）
+        messages, meta = prompts.build_messages(question, chunks_ctx, version,
+                                                history, group=group)
         res['messages'] = messages
         res['meta'] = meta
 

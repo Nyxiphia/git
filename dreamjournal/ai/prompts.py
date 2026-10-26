@@ -31,6 +31,22 @@ FORMAT_V2 = (
     '资料不足时只输出：【结论】资料不足：<缺少什么>'
 )
 
+# ---------------- 直接模型组（对照组）的提示词 ----------------
+# 2.5 要求两组“基本输出格式”一致，但 RAG 组才增加“依据资料回答、引用来源”的要求。
+# 因此对照组的系统提示必须是**中性**的：允许使用模型已有知识，不要求引用，
+# 也不设置“资料不足”规则——否则对照组没有资料可依，会一律拒答，比较就失去意义。
+SYSTEM_DIRECT = (
+    '你是一名严谨的技术助手，请直接回答用户的问题，可以使用你已有的知识。\n'
+    '如果确实不确定，请说明不确定，不要编造具体数字或事实。\n'
+    '回答使用简体中文，先给结论，再列依据。'
+)
+
+FORMAT_DIRECT = (
+    '输出格式：\n'
+    '【结论】一到三句话直接回答问题。\n'
+    '【依据】逐条列出你的依据。'
+)
+
 
 def _format_context(chunks):
     """把检索片段渲染成带编号的【资料】块。"""
@@ -43,14 +59,32 @@ def _format_context(chunks):
     return '\n\n'.join(lines)
 
 
-def build_messages(question, chunks, version=DEFAULT_VERSION, history=None):
+def build_messages(question, chunks, version=DEFAULT_VERSION, history=None,
+                   group='rag'):
     """组装一次完整输入。
+
+    group='rag'     ：提供【资料】+ 依据资料回答 + 引用编号 + 资料不足规则
+    group='direct'  ：**不提供资料**，用中性系统提示让模型凭已有知识回答，
+                      仅保留相同的基本输出格式（便于两组对照）
 
     返回 (messages, meta)：messages 是 OpenAI 兼容的对话数组，
     meta 记录本次输入的组装信息（版本、字符数、片段数、是否含历史），供 2.2 统计。
     """
     if version not in PROMPT_VERSIONS:
         raise ValueError('未知 Prompt 版本：%r' % version)
+
+    if group == 'direct':
+        # 对照组：无资料、无引用要求、无“资料不足”规则
+        user = '%s\n\n%s' % (question, FORMAT_DIRECT)
+        messages = [{'role': 'system', 'content': SYSTEM_DIRECT},
+                    {'role': 'user', 'content': user}]
+        chars = sum(len(m['content']) for m in messages)
+        return messages, {
+            'version': 'direct', 'messages': len(messages), 'chars': chars,
+            'est_tokens': int(chars / 1.6), 'chunks': 0, 'has_history': False,
+            'has_citation_rule': False, 'has_refusal_rule': False,
+            'has_format_rule': True, 'group': 'direct',
+        }
 
     if version == 'v1':
         # v1：一句话系统提示 + 资料 + 问题，没有引用要求、没有不足判定、没有格式约束
@@ -76,6 +110,7 @@ def build_messages(question, chunks, version=DEFAULT_VERSION, history=None):
         'has_citation_rule': '来源编号' in SYSTEM_V2 and version == 'v2',
         'has_refusal_rule': '资料不足' in SYSTEM_V2 and version == 'v2',
         'has_format_rule': version == 'v2',
+        'group': 'rag',
     }
     return messages, meta
 

@@ -13,12 +13,25 @@
   judge       人工判断用的标准描述
 """
 
+import re
+
+# 引号内出现的“禁用提法”不算违规：正确回答往往会**引用并否定**这些说法
+_QUOTED = re.compile(r'[「“"『]([^」”"』]{0,60})[」”"』]')
+
+
+def _in_quote(answer, kw):
+    for m in _QUOTED.finditer(answer or ''):
+        if kw in m.group(1):
+            return True
+    return False
+
+
 CASES = [
     {
         'id': 'Q1', 'kind': '单片段',
         'question': '这个项目为什么不做解梦功能？',
         'must_have': ['象征', '标准', '预测'],
-        'must_not': ['水代表', '梦见水意味着', '预示'],
+        'must_not': ['水代表', '梦见水意味着', '预示着你将会'],
         'cite_hint': '实验2',
         'judge': '应说明：删掉解梦知识库，因为象征含义没有客观标准、模型会输出“这预示着你……”式断言；'
                  '若回答给出具体梦境象征解释即为无依据。',
@@ -81,14 +94,20 @@ CASES = [
 
 
 def auto_judge(case, answer):
-    """按关键词做一次可复现的自动判定，结果供人工复核。
+    """按关键词做一次可复现的自动判定，结果**仅供人工复核**，不能直接当结论。
 
-    返回 dict：points_hit / points_total / missing / violated / verdict
+    已知局限：关键词匹配不理解否定与语境。例如正确回答会引用并否定“这预示着你……”，
+    若不排除引号内的内容，就会被误判为“无依据/错误”。因此这里做两件事：
+      1) 引号内出现的禁用说法不计为违规；
+      2) 在返回值里标注 auto_only=True，提示必须人工复核。
+
+    返回 dict：points_hit / points_total / missing / violated / verdict / auto_only
     """
     a = answer or ''
     hit = [k for k in case['must_have'] if k in a]
     missing = [k for k in case['must_have'] if k not in a]
-    violated = [k for k in case['must_not'] if k in a]
+    violated = [k for k in case['must_not'] if k in a and not _in_quote(a, k)]
+    quoted_only = [k for k in case['must_not'] if k in a and _in_quote(a, k)]
     if violated:
         verdict = '无依据/错误'
     elif not missing:
@@ -98,4 +117,6 @@ def auto_judge(case, answer):
     else:
         verdict = '未命中'
     return {'points_hit': len(hit), 'points_total': len(case['must_have']),
-            'missing': missing, 'violated': violated, 'verdict': verdict}
+            'missing': missing, 'violated': violated,
+            'violated_in_quote_ignored': quoted_only,
+            'verdict': verdict, 'auto_only': True}
