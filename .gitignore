@@ -65,3 +65,6 @@ data/
 logs/
 out/
 *.db
+
+# ---- 实验5 检索索引（可由 ingest 重建）----
+rag_data/

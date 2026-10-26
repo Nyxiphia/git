@@ -26,17 +26,19 @@ LOG = get_logger()
 
 
 class DreamApp:
-    def __init__(self, root, services, db_path=''):
+    def __init__(self, root, services, db_path='', ai_online=True):
         self.root = root
         self.svc = services
         self.db_path = db_path
+        self.ai_online = ai_online
         self.current_id = None
-        root.title('AI 梦境记录与解析 v0.2.0')
-        root.geometry('1080x680')
+        root.title('AI 梦境记录与解析 v0.3.0')
+        root.geometry('1180x720')
         root.configure(bg='#f4f6fa')
         self._build()
         self.refresh()
-        LOG.info('界面启动，数据库=%s', db_path)
+        LOG.info('界面启动，数据库=%s，AI=%s', db_path,
+                 '在线' if ai_online else '离线')
 
     # ================= 界面构建 =================
     def _build(self):
@@ -44,25 +46,94 @@ class DreamApp:
         head.pack(fill='x')
         tk.Label(head, text='我的梦境', font=FONT_T, bg='#e6e6e6').pack(
             side='left', padx=14, pady=8)
-        tk.Label(head, text='v0.2.0 测试修订版 · 数据仅保存在本机', font=FONT_S,
-                 bg='#e6e6e6', fg='#666').pack(side='right', padx=14)
+        tk.Label(head, text='v0.3.0 · 接入 RAG 知识问答 · 数据仅保存在本机',
+                 font=FONT_S, bg='#e6e6e6', fg='#666').pack(side='right', padx=14)
 
         self.nb = ttk.Notebook(self.root)
         self.nb.pack(fill='both', expand=True, padx=8, pady=8)
 
         self.tab_dream = tk.Frame(self.nb, bg='#f4f6fa')
         self.tab_trend = tk.Frame(self.nb, bg='#f4f6fa')
+        self.tab_qa = tk.Frame(self.nb, bg='#f4f6fa')
         self.tab_set = tk.Frame(self.nb, bg='#f4f6fa')
         self.nb.add(self.tab_dream, text='  梦境  ')
         self.nb.add(self.tab_trend, text='  趋势  ')
+        self.nb.add(self.tab_qa, text='  知识问答  ')
         self.nb.add(self.tab_set, text='  设置  ')
         self._build_dream(self.tab_dream)
         self._build_trend(self.tab_trend)
+        self._build_qa(self.tab_qa)
         self._build_setting(self.tab_set)
 
         self.status = tk.Label(self.root, text='就绪', font=FONT_S, anchor='w',
                                bg='#e6e6e6', fg='#333', relief='sunken')
         self.status.pack(fill='x', side='bottom')
+
+    # ---------------- 知识问答页（实验5 新增） ----------------
+    def _build_qa(self, p):
+        top = tk.Frame(p, bg='#f4f6fa')
+        top.pack(fill='x', padx=12, pady=(10, 4))
+        tk.Label(top, text='问题', font=FONT, bg='#f4f6fa').pack(side='left')
+        self.q_var = tk.StringVar(value='这个项目为什么不做解梦功能？')
+        ent = tk.Entry(top, textvariable=self.q_var, font=FONT)
+        ent.pack(side='left', fill='x', expand=True, padx=8)
+        ent.bind('<Return>', lambda e: self.on_ask())
+        tk.Button(top, text='提问', font=FONT_B, bg='#dce9ff',
+                  command=self.on_ask).pack(side='left')
+
+        tip = ('当前为【离线演示模式】：无 API Key，不产生模型输出，只演示'
+               '“检索 → 上下文 → 回答与出处”的链路。'
+               if not self.ai_online else
+               '在线模式：已连接云端模型，回答由模型生成并附来源编号。')
+        tk.Label(p, text=tip, font=FONT_S, bg='#f4f6fa',
+                 fg='#c07800' if not self.ai_online else '#3d8b3d').pack(
+            anchor='w', padx=12)
+
+        self.qa_answer = tk.Text(p, height=12, font=FONT, wrap='word',
+                                 relief='solid', borderwidth=1, bg='#fbfdff')
+        self.qa_answer.pack(fill='both', expand=True, padx=12, pady=6)
+
+        src = tk.LabelFrame(p, text='检索到的资料与出处', font=FONT, bg='#f4f6fa')
+        src.pack(fill='both', expand=True, padx=12, pady=(0, 8))
+        self.qa_sources = tk.Text(src, height=8, font=('Consolas', 9), wrap='word',
+                                  relief='solid', borderwidth=1, bg='#f7f7f7')
+        self.qa_sources.pack(fill='both', expand=True, padx=8, pady=8)
+
+        self.qa_meta = tk.Label(p, text='', font=FONT_S, bg='#f4f6fa', fg='#666')
+        self.qa_meta.pack(anchor='w', padx=12, pady=(0, 6))
+
+    def on_ask(self):
+        q = self.q_var.get().strip()
+        if not q:
+            self._msg('请输入问题', 'warn')
+            return
+        pipe = self.svc.get('ai')
+        if pipe is None:
+            self._msg('AI 适配层未装配', 'error')
+            return
+        res = pipe.ask(q, group='rag', k=4)
+        self.qa_answer.delete('1.0', 'end')
+        head = '【状态】%s' % res['status']
+        if res['offline']:
+            head += '　【离线演示，非模型输出】'
+        self.qa_answer.insert('1.0', head + '\n\n' + (res['answer'] or '(无回答)'))
+
+        self.qa_sources.delete('1.0', 'end')
+        if res['retrieved']:
+            for c in res['retrieved']:
+                self.qa_sources.insert(
+                    'end', '[%d] %-12s 分数 %.2f  %s\n     %s\n     %s\n\n'
+                    % (c['rank'], c['chunk_id'], c['score'], c['locator'],
+                       c['source'], c['text'][:110].replace('\n', ' ')))
+        else:
+            self.qa_sources.insert('1.0', '（未检索到相关片段，按设计要求返回“资料不足”）')
+
+        self.qa_meta.config(
+            text='检索：%s ｜ Top-k=%d ｜ 输入 %d 字 / 约 %d tokens ｜ 耗时 %.0f ms'
+                 % (res['retrieval_info'].get('method', '-'), res['k'],
+                    res['meta'].get('chars', 0), res['meta'].get('est_tokens', 0),
+                    res['latency_ms']))
+        self._msg('问答完成：%s' % res['status'])
 
     # ---------------- 梦境页 ----------------
     def _build_dream(self, p):

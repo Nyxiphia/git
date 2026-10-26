@@ -34,6 +34,25 @@ def build_services(db_path):
     }
 
 
+def build_ai_services():
+    """装配 AI 适配层（实验5）。未配置 API Key 时退回离线演示，界面照常可用。
+
+    返回 (pipeline, online)。online=False 时界面会明确标注“离线模式”。
+    """
+    from dreamjournal.ai.client import LLMClient
+    from dreamjournal.ai.pipeline import (INDEX_PATH, RagPipeline,
+                                          make_offline_pipeline)
+
+    key = os.environ.get('DREAM_LLM_API_KEY', '')
+    if not key:
+        return make_offline_pipeline(index_path=INDEX_PATH), False
+    client = LLMClient(api_key=key,
+                       base_url=os.environ.get('DREAM_LLM_BASE_URL',
+                                               'https://api.deepseek.com/v1'),
+                       model=os.environ.get('DREAM_LLM_MODEL', 'deepseek-chat'))
+    return RagPipeline(client, INDEX_PATH), True
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description='AI 梦境记录与解析')
     ap.add_argument('--db', default=DEFAULT_DB, help='SQLite 数据库文件路径')
@@ -77,8 +96,10 @@ def main(argv=None):
 
     import tkinter as tk
     from dreamjournal.ui import DreamApp
+    ai_pipe, ai_online = build_ai_services()
+    services['ai'] = ai_pipe
     root = tk.Tk()
-    DreamApp(root, services, db_path=args.db)
+    DreamApp(root, services, db_path=args.db, ai_online=ai_online)
     root.mainloop()
     log.info('界面退出')
     return 0
