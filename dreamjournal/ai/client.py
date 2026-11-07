@@ -43,13 +43,16 @@ class LLMResponseError(LLMError):
 class LLMResult:
     """一次调用的结果与计量。"""
 
-    def __init__(self, text, model, usage, latency_ms, raw=None, offline=False):
+    def __init__(self, text, model, usage, latency_ms, raw=None, offline=False,
+                 tool_calls=None):
         self.text = text
         self.model = model
         self.usage = usage or {}          # {'prompt_tokens':..,'completion_tokens':..,'total_tokens':..}
         self.latency_ms = latency_ms
         self.raw = raw
         self.offline = offline
+        # 实验6：工具调用。每项形如 {'id','name','arguments'}，arguments 是原始 JSON 字符串
+        self.tool_calls = tool_calls or []
 
     def __repr__(self):
         return ('LLMResult(model=%r, chars=%d, total_tokens=%s, latency=%.0fms, offline=%s)'
@@ -102,6 +105,10 @@ class LLMClient:
             'max_tokens': overrides.get('max_tokens', self.max_tokens),
             'stream': False,
         }
+        # 实验6：把工具 Schema 一起发给模型，由模型决定是否调用
+        if overrides.get('tools'):
+            payload['tools'] = overrides['tools']
+            payload['tool_choice'] = overrides.get('tool_choice', 'auto')
         url = self.base_url + '/chat/completions'
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
 
@@ -161,10 +168,17 @@ class LLMClient:
             raise LLMResponseError('返回体缺少 choices：%s' % raw[:200])
         msg = choices[0].get('message') or {}
         text = (msg.get('content') or '').strip()
-        if not text:
-            raise LLMResponseError('模型返回空内容')
+        calls = []
+        for c in (msg.get('tool_calls') or []):
+            fn = c.get('function') or {}
+            calls.append({'id': c.get('id') or '',
+                          'name': fn.get('name') or '',
+                          'arguments': fn.get('arguments') or '{}'})
+        if not text and not calls:
+            raise LLMResponseError('模型返回空内容（既无文本也无工具调用）')
         return LLMResult(text=text, model=data.get('model') or model,
-                         usage=data.get('usage') or {}, latency_ms=latency, raw=data)
+                         usage=data.get('usage') or {}, latency_ms=latency, raw=data,
+                         tool_calls=calls)
 
 
 # ---------------- 离线提供者 ----------------
