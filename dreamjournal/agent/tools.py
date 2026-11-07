@@ -128,11 +128,14 @@ def _export_markdown(ctx, field_type, top_n, filename):
 
     os.makedirs(OUT_DIR, exist_ok=True)
     tmp = real + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
+    # newline='' 关闭换行转换，保证写入字节与 text 完全一致
+    with open(tmp, 'w', encoding='utf-8', newline='') as f:
         f.write(text)
     os.replace(tmp, real)
+    # 报**磁盘上的真实大小**，而不是字符串长度：
+    # Windows 默认会把 \n 转成 \r\n，两者会差出“行数”个字节（这是实机测试发现的）。
     return {'path': os.path.relpath(real, ROOT).replace('\\', '/'),
-            'bytes': len(text.encode('utf-8')), 'rows': len(stats['top'])}
+            'bytes': os.path.getsize(real), 'rows': len(stats['top'])}
 
 
 def _read_export(ctx, filename):
@@ -151,7 +154,8 @@ def _read_export(ctx, filename):
         return {'exists': False, 'filename': filename, 'note': '文件不存在'}
     with open(real, encoding='utf-8') as f:
         text = f.read()
-    return {'exists': True, 'filename': filename, 'bytes': len(text.encode('utf-8')),
+    return {'exists': True, 'filename': filename,
+            'bytes': os.path.getsize(real),          # 与 export 一致，用磁盘真实大小
             'lines': len(text.split('\n')),
             'head': '\n'.join(text.split('\n')[:12])}
 
