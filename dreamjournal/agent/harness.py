@@ -39,7 +39,8 @@ SYSTEM_PROMPT = (
 )
 
 USER_TEMPLATE = (
-    '任务：统计本机梦境记录中「{field_type}」类型的标签出现次数，给出前 {top_n} 名。\n'
+    '任务：统计本机梦境记录中「{field_type}」类型的标签出现次数，给出前 {top_n} 名，'
+    '并把统计结果导出为 out/dream_stats.md。\n'
     '统计口径：排除待确认字段（needs_confirm=1）。\n'
     '输出要求：最终回答里用「标签 次数」逐条列出，例如“焦虑 7 次”。'
 )
