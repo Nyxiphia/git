@@ -88,7 +88,8 @@ def cmd_run(args):
     print('\n配置：%s（%s）' % (cfg.get('display_name'), cfg.get('_path')))
     print('输入%s：%s' % (tag, text))
     print('-' * 70)
-    res = ParsePrototype(cfg).parse(text)
+    pipe = ParsePrototype(cfg)
+    res = pipe.parse(text)
     _print_result(res)
     if res['status'] == 'ok':
         obj = {'information_density': res['information_density'],
@@ -100,6 +101,13 @@ def cmd_run(args):
             print('   · %s' % e)
         banned = schema.scan_banned(res.get('raw') or '')
         print('解读词检查：%s' % ('未出现' if not banned else '出现 %s' % banned))
+        print('可用字段行（可直接入 parsed_field）：%d 条，其中待确认 %d 条'
+              % (len(pipe.to_db_rows(res)),
+                 sum(1 for r in pipe.to_db_rows(res) if r['needs_confirm'])))
+        if args.save_db:
+            saved = pipe.save_to_db(args.save_db, text, res)
+            print('已写入 %s：记录 #%s，字段 %s'
+                  % (saved['db'], saved['record_id'], saved['field_ids']))
     return 0 if res['status'] == 'ok' else 1
 
 
@@ -125,6 +133,7 @@ def main(argv=None):
     p.add_argument('--profile', default='v2', choices=['v1', 'v2'])
     p.add_argument('--case')
     p.add_argument('--text')
+    p.add_argument('--save-db', help='把结果写入指定的 SQLite 文件（不会碰用户现有数据库）')
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser('baseline')
