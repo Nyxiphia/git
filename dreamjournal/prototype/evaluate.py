@@ -112,9 +112,55 @@ def run_method(method, cases, verbose=True):
     return rows
 
 
+def _norm_label(s):
+    s = (s or '').strip()
+    for t in ('的', '了', '着'):
+        s = s.replace(t, '')
+    return s
+
+
+def _jaccard(a, b):
+    A, B = set(_norm_label(a)), set(_norm_label(b))
+    if not A or not B:
+        return 0.0
+    return len(A & B) / len(A | B)
+
+
+def loose_prf(gold, pred, thresh=0.5):
+    """宽松匹配：忽略 field_type，标签字符重合度 >= 0.5 视为同一标签。
+
+    为什么需要它：中文标签同义不同词很常见（焦虑/着急、水边/水面、
+    被追赶/追赶者），严格按字符串比对会把“抽到了但叫法不同”也判成 0 分，
+    使得结论失真。两个指标并列，才能区分“没抽到”和“抽到了但用词不同”。
+    """
+    g = [x['label'] for x in (gold or [])]
+    p = [x['label'] for x in (pred or [])]
+    if not g and not p:
+        return 1.0, 1.0, 1.0
+    if not g or not p:
+        return 0.0, 0.0, 0.0
+    used, tp = set(), 0
+    for gi in g:
+        best, bi = 0.0, -1
+        for pi, pv in enumerate(p):
+            if pi in used:
+                continue
+            j = _jaccard(gi, pv)
+            if j > best:
+                best, bi = j, pi
+        if best >= thresh:
+            tp += 1
+            used.add(bi)
+    prec, rec = tp / len(p), tp / len(g)
+    f1 = 2 * prec * rec / (prec + rec) if (prec + rec) else 0.0
+    return prec, rec, f1
+
+
 def summarize(method, rows):
     n = len(rows) or 1
     tokens = sum((r['usage'] or {}).get('total_tokens') or 0 for r in rows)
+    loose = [loose_prf(r['gold'], r['pred']) for r in rows]
+    abst = [r for r in rows if not r['gold']]
     return {
         'method': method,
         'cases': len(rows),
@@ -123,8 +169,12 @@ def summarize(method, rows):
         'precision': round(sum(r['p'] for r in rows) / n, 3),
         'recall': round(sum(r['r'] for r in rows) / n, 3),
         'f1': round(sum(r['f1'] for r in rows) / n, 3),
+        'loose_p': round(sum(x[0] for x in loose) / n, 3),
+        'loose_r': round(sum(x[1] for x in loose) / n, 3),
+        'loose_f1': round(sum(x[2] for x in loose) / n, 3),
         'banned_rate': round(sum(1 for r in rows if r['banned']) / n, 3),
-        'abstain_ok': sum(1 for r in rows if r['abstained']),
+        'abstain_gold': len(abst),
+        'abstain_ok': sum(1 for r in abst if not r['pred']),
         'avg_latency_ms': round(sum(r['latency_ms'] for r in rows) / n, 1),
         'tokens': tokens,
         'est_cost_cny': round(tokens / 1_000_000 * ((PRICE_IN + PRICE_OUT) / 2), 5),
@@ -154,14 +204,15 @@ def run_all(methods=('baseline', 'v1', 'v2')):
     with open(os.path.join(OUT_DIR, 'exp7_eval.json'), 'w', encoding='utf-8') as f:
         json.dump(payload, f, ensure_ascii=False, indent=1)
 
-    md = ['| 方案 | 样例 | JSON合法率 | Schema合规率 | 字段P | 字段R | 字段F1 | 解读词出现率 '
-          '| 平均耗时(ms) | tokens |',
+    md = ['| 方案 | 样例 | JSON合法率 | Schema合规率 | 严格F1 | 宽松F1 | 解读词出现率 '
+          '| 正确弃权 | 平均耗时(ms) | tokens |',
           '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |']
     for m in results:
         s = results[m]['summary']
-        md.append('| %s | %d | %.0f%% | %.0f%% | %.2f | %.2f | %.2f | %.0f%% | %.0f | %d |'
+        md.append('| %s | %d | %.0f%% | %.0f%% | %.2f | %.2f | %.0f%% | %d/%d | %.0f | %d |'
                   % (m, s['cases'], s['json_ok_rate'] * 100, s['schema_ok_rate'] * 100,
-                     s['precision'], s['recall'], s['f1'], s['banned_rate'] * 100,
+                     s['f1'], s['loose_f1'], s['banned_rate'] * 100,
+                     s['abstain_ok'], s['abstain_gold'],
                      s['avg_latency_ms'], s['tokens']))
     table = '\n'.join(md)
     with open(os.path.join(OUT_DIR, 'exp7_eval.md'), 'w', encoding='utf-8') as f:
