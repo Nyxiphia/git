@@ -1,0 +1,146 @@
+{
+  "version": 3,
+  "name": "实验7 核心AI能力评测集",
+  "task": "梦境自由文本 → 结构化字段",
+  "created": "2026-11-10",
+  "note": "E01—E12 取自项目自带样例数据（dreamjournal/seed.py 的 DEMO），其字段即金标准；E13—E15 是按 2.2 要求补充的边界样例（超出能力范围、信息不足、诱导解读）。全部样例为撰写该项目时虚构的梦境文本，不含任何真实个人隐私。",
+  "groups": {
+    "正常": "信息充足，应抽出多个字段",
+    "信息不足": "内容过短或明确记不清，应返回空字段并标注低信息量",
+    "超出范围": "不是梦境叙述，或要求做解读/预测，应拒绝给出字段或直接报错"
+  },
+  "cases": [
+    {
+      "id": "E01", "group": "正常",
+      "raw_text": "我梦见在考试，卷子上的字一个都不认识，旁边的人都在写，我很着急。",
+      "gold": [
+        {"field_type": "emotion", "label": "焦虑"},
+        {"field_type": "scene", "label": "考场"},
+        {"field_type": "symbol", "label": "考试"},
+        {"field_type": "symbol", "label": "陌生的字"}
+      ],
+      "expect": "至少命中 2 个标签；不得出现解读性文字"
+    },
+    {
+      "id": "E02", "group": "正常",
+      "raw_text": "梦见一片水，怎么也游不到岸，脚下很冷。",
+      "gold": [
+        {"field_type": "emotion", "label": "无助"},
+        {"field_type": "scene", "label": "水边"},
+        {"field_type": "symbol", "label": "水"}
+      ],
+      "expect": "至少命中 2 个标签"
+    },
+    {
+      "id": "E03", "group": "正常",
+      "raw_text": "有人一直在后面追我，我在楼梯上跑，腿抬不起来。",
+      "gold": [
+        {"field_type": "emotion", "label": "恐惧"},
+        {"field_type": "symbol", "label": "被追赶"},
+        {"field_type": "symbol", "label": "楼梯"}
+      ],
+      "expect": "至少命中 2 个标签"
+    },
+    {
+      "id": "E04", "group": "正常",
+      "raw_text": "又梦见考试，这次是找不到考场，在楼里绕。",
+      "gold": [
+        {"field_type": "emotion", "label": "焦虑"},
+        {"field_type": "scene", "label": "教学楼"},
+        {"field_type": "symbol", "label": "考试"},
+        {"field_type": "symbol", "label": "迟到"}
+      ],
+      "expect": "至少命中 2 个标签；注意“绕楼”可对应迟到类意象"
+    },
+    {
+      "id": "E05", "group": "正常",
+      "raw_text": "梦见和前同事吵架，说了很多平时不敢说的话。",
+      "gold": [
+        {"field_type": "emotion", "label": "愤怒"},
+        {"field_type": "character", "label": "前同事"},
+        {"field_type": "symbol", "label": "争吵"}
+      ],
+      "expect": "人物字段置信度应偏低（指向不明确的熟人），可标为待确认"
+    },
+    {
+      "id": "E06", "group": "正常",
+      "raw_text": "梦见海水涨上来，我在楼顶看。",
+      "gold": [
+        {"field_type": "emotion", "label": "紧张"},
+        {"field_type": "symbol", "label": "水"},
+        {"field_type": "scene", "label": "楼顶"}
+      ],
+      "expect": "至少命中 2 个标签"
+    },
+    {
+      "id": "E07", "group": "正常",
+      "raw_text": "梦见在楼梯上一直往上走，永远走不到头。",
+      "gold": [
+        {"field_type": "emotion", "label": "疲惫"},
+        {"field_type": "symbol", "label": "楼梯"}
+      ],
+      "expect": "至少命中 1 个标签；不得输出“永远走不到头象征……”式解读"
+    },
+    {
+      "id": "E08", "group": "正常",
+      "raw_text": "梦见考试，这次考的是我完全不会的科目。",
+      "gold": [
+        {"field_type": "emotion", "label": "焦虑"},
+        {"field_type": "symbol", "label": "考试"}
+      ],
+      "expect": "至少命中 1 个标签"
+    },
+    {
+      "id": "E09", "group": "正常",
+      "raw_text": "梦见被追，跑进一条很长的走廊。",
+      "gold": [
+        {"field_type": "emotion", "label": "恐惧"},
+        {"field_type": "symbol", "label": "被追赶"},
+        {"field_type": "scene", "label": "走廊"}
+      ],
+      "expect": "至少命中 2 个标签"
+    },
+    {
+      "id": "E10", "group": "正常",
+      "raw_text": "梦到一片很平静的湖水，坐在岸边。",
+      "gold": [
+        {"field_type": "emotion", "label": "平静"},
+        {"field_type": "symbol", "label": "水"}
+      ],
+      "expect": "情绪应为正面/中性（平静），不得一律判为焦虑"
+    },
+    {
+      "id": "E11", "group": "正常",
+      "raw_text": "梦见赶不上火车，行李也丢了。",
+      "gold": [
+        {"field_type": "emotion", "label": "焦虑"},
+        {"field_type": "symbol", "label": "迟到"}
+      ],
+      "expect": "至少命中 1 个标签"
+    },
+    {
+      "id": "E12", "group": "信息不足",
+      "raw_text": "记不清了，好像在一个很大的房子里。",
+      "gold": [],
+      "expect": "information_density 应为 low；字段数不超过 2 个；不得编造情绪"
+    },
+    {
+      "id": "E13", "group": "超出范围",
+      "raw_text": "今天下午三点开组会，讨论下季度的排期和预算，会后把纪要发给各位。",
+      "gold": [],
+      "expect": "这不是梦境叙述，应返回空字段 + information_density=low，或明确报“无法解析”"
+    },
+    {
+      "id": "E14", "group": "信息不足",
+      "raw_text": "梦。",
+      "gold": [],
+      "expect": "输入过短，应在预处理阶段就拒绝，不调用模型"
+    },
+    {
+      "id": "E15", "group": "超出范围",
+      "raw_text": "梦见水，这预示着什么？我最近会不会有好事？",
+      "gold": [{"field_type": "symbol", "label": "水"}],
+      "expect": "只抽“水”这一意象；绝不可出现“预示/吉凶/运势/象征含义”等解读词"
+    }
+  ]
+}

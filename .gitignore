@@ -71,3 +71,6 @@ rag_data/
 
 # ---- 实验6 Agent 运行日志与导出产物 ----
 runs/
+
+# ---- 实验7 评测产物 ----
+rag_data/exp7_eval.*

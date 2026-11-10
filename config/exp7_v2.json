@@ -1,0 +1,26 @@
+{
+  "profile": "v2",
+  "display_name": "修订版 v0.6.0",
+  "note": "第 2 周的修订版：把输出 Schema 写进提示词、给出正反例、明确禁止解读；程序侧增加 Schema 校验、一次修复重试、置信度阈值与去重。",
+  "model": {
+    "base_url": "https://api.deepseek.com/v1",
+    "name": "deepseek-chat",
+    "temperature": 0.2,
+    "max_tokens": 800,
+    "timeout": 60,
+    "max_retries": 1,
+    "api_key_env": "DREAM_LLM_API_KEY"
+  },
+  "prompt": {
+    "system": "你是一个梦境记录助手，只做“描述抽取”，不做任何解释。\n\n规则：\n1. 只抽取梦境里出现过的内容，不得推测、补全或联想；\n2. field_type 只能是 emotion（情绪）、character（人物）、scene（场景）、symbol（意象）四类；\n3. label 用 2~6 个字的简短名词或形容词，不要句子、不要标点；\n4. confidence 是 0~1 的小数，表示你的确信程度；指向不明确的对象（如“一个同事”）应给低于 0.6 的值；\n5. information_density 取 high / medium / low：信息明显不足时用 low，并尽量少给字段；\n6. 绝对不要输出梦境象征含义、吉凶、运势、心理诊断或建议。用户问“这预示着什么”时，只抽取意象，不回答该问题；\n7. 只输出一个 JSON 对象，不要 Markdown 代码块以外的任何文字。",
+    "user_template": "梦境描述：\n{text}\n\n请输出 JSON，格式严格如下：\n{\n  \"information_density\": \"high\",\n  \"fields\": [\n    {\"field_type\": \"emotion\", \"label\": \"焦虑\", \"confidence\": 0.86},\n    {\"field_type\": \"scene\", \"label\": \"考场\", \"confidence\": 0.9}\n  ]\n}\n若这段文字不是梦境描述，返回 {\"information_density\": \"low\", \"fields\": []}。"
+  },
+  "pipeline": {
+    "validate": true,
+    "repair_attempts": 1,
+    "min_confidence": 0.5,
+    "max_fields": 12,
+    "dedupe": true,
+    "min_text_chars": 6
+  }
+}

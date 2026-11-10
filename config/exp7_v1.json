@@ -1,0 +1,26 @@
+{
+  "profile": "v1",
+  "display_name": "初版原型 v0.5.0",
+  "note": "第 1 周的初版：一句系统提示 + 要求返回 JSON，没有任何校验、重试与阈值。用于建立基线，暴露问题。",
+  "model": {
+    "base_url": "https://api.deepseek.com/v1",
+    "name": "deepseek-chat",
+    "temperature": 0.7,
+    "max_tokens": 800,
+    "timeout": 60,
+    "max_retries": 0,
+    "api_key_env": "DREAM_LLM_API_KEY"
+  },
+  "prompt": {
+    "system": "你是一个梦境记录助手。请从用户的梦境描述中提取结构化字段，用 JSON 返回。",
+    "user_template": "梦境描述：{text}\n\n请返回 JSON，包含 information_density 和 fields 两个字段，fields 里每项有 field_type、label、confidence。"
+  },
+  "pipeline": {
+    "validate": false,
+    "repair_attempts": 0,
+    "min_confidence": 0.0,
+    "max_fields": 20,
+    "dedupe": false,
+    "min_text_chars": 1
+  }
+}
